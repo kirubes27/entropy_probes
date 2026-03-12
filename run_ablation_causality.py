@@ -89,6 +89,7 @@ from tasks import (
     get_stated_confidence_signal,
     format_answer_or_delegate_prompt,
     get_answer_or_delegate_signal,
+    get_delegate_trial_indices,
     format_other_confidence_prompt,
     get_other_confidence_signal,
     STATED_CONFIDENCE_OPTIONS,
@@ -117,7 +118,7 @@ PROBE_POSITION = "options_newline"  # Position from test_meta_transfer.py output
 # - "metamcuncert": Ablate MC uncertainty directions found from meta activations (test_meta_transfer.py)
 # - "metamcq" / "metamcanswer": Ablate MC answer directions found from meta activations (test_meta_transfer.py)
 # - "joint": Ablate the span of multiple directions at once (configured below)
-DIRECTION_TYPE = "metamcanswer"
+DIRECTION_TYPE = "uncertainty"  # Confirmatory Exp3 primary
 
 # Optional joint ablation configuration. When provided with 2+ components, the script
 # ablates the orthonormal span of all listed directions at each layer.
@@ -205,7 +206,7 @@ DIRECTION_DESCRIPTIONS = {
 #     * "logit_margin" -> logit(Answer) - logit(Delegate) for those same tokens.
 # - For META_TASK=confidence: this script always uses the stated-confidence option probabilities;
 #   if you set CONFIDENCE_SIGNAL="logit_margin" we fall back to "prob" for that task.
-CONFIDENCE_SIGNAL = "logit_margin"  # "prob" or "logit_margin"
+CONFIDENCE_SIGNAL = "logit_margin"  # Exp3A/3B primary; switch to "prob" for Exp3C
 
 # --- Quantization ---
 LOAD_IN_4BIT = True   # Set True for 70B+ models
@@ -236,10 +237,12 @@ EXPANDED_BATCH_TARGET = 96
 LAYERS = None  # e.g., [20, 25, 30] for quick testing
 
 # Optional: specify which direction methods to test (None = all available)
-METHODS = ["mean_diff"]  # e.g., ["mean_diff"] or ["probe"] to test just one
+METHODS = ["probe", "mean_diff"]  # Confirmatory: run both methods
 
 # Token positions within the meta-task prompt where we ablate
-PROBE_POSITIONS = ["options_newline"]  # ["question_mark", "question_newline", "options_newline", "final"]
+# Exp3A: ["options_newline"] (default)
+# Exp3B: ["final"]
+PROBE_POSITIONS = ["options_newline"]
 
 # Extra diagnostics
 PRINT_DELTA_DIAGNOSTICS = True
@@ -1040,6 +1043,7 @@ def build_meta_task_prompt_cache(
     meta_task: str,
     use_chat_template: bool,
     original_indices: Optional[np.ndarray] = None,
+    total_questions: Optional[int] = None,
 ) -> Dict:
     """Precompute prompts, mappings, token positions, and padded GPU batches."""
     format_fn = get_format_fn(meta_task)
@@ -1047,10 +1051,19 @@ def build_meta_task_prompt_cache(
     mappings = []
     position_names = ("question_mark", "question_newline", "options_newline", "final")
     position_indices = {name: [] for name in position_names}
+    delegate_trial_indices = None
+    if meta_task == "delegate":
+        idx_list = original_indices.tolist() if isinstance(original_indices, np.ndarray) else original_indices
+        delegate_trial_indices = get_delegate_trial_indices(
+            len(questions),
+            seed=SEED,
+            original_indices=idx_list,
+            total_questions=total_questions,
+        )
 
     for q_idx, question in enumerate(questions):
-        trial_idx = int(original_indices[q_idx]) if original_indices is not None else q_idx
         if meta_task == "delegate":
+            trial_idx = delegate_trial_indices[q_idx]
             prompt, _, mapping = format_fn(
                 question,
                 tokenizer,
@@ -1144,9 +1157,9 @@ def run_ablation_for_method(
             - "question_mark": Token after "?" in question
             - "question_newline": Newline after question
             - "options_newline": Newline after MC options
-        original_indices: Original dataset indices for each question. Used for
-            trial_index in delegate task to match prompt formatting with
-            test_meta_transfer.py. If None, uses local indices (legacy behavior).
+        original_indices: Original dataset indices for each question. Kept for
+            result bookkeeping; delegate trial_index mapping is derived from
+            question order via seeded legacy remap for consistency with transfer scripts.
 
     Returns dict with per-layer results including baseline, ablated, and controls.
     """
@@ -3831,16 +3844,16 @@ def main():
     print("Loading dataset...")
     dataset = load_dataset(base_name, model_dir)
     all_data = dataset["data"]
+    n_total = len(all_data)
 
     if USE_TRANSFER_SPLIT:
         # Use same 80/20 split as transfer analysis for apples-to-apples comparison
-        n_total = len(all_data)
         indices = np.arange(n_total)
         train_idx, test_idx = train_test_split(
             indices, train_size=TRAIN_SPLIT, random_state=SEED
         )
         data_items = [all_data[i] for i in test_idx]
-        # Keep original indices for trial_index in delegate prompt formatting
+        # Keep original indices for result bookkeeping and traceability
         original_indices = test_idx
     else:
         # Legacy behavior: first NUM_QUESTIONS
@@ -3903,6 +3916,7 @@ def main():
         meta_task=META_TASK,
         use_chat_template=use_chat_template,
         original_indices=original_indices,
+        total_questions=n_total,
     )
 
     # Run ablation for each method and position

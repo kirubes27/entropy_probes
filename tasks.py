@@ -14,6 +14,7 @@ Each task config provides:
 """
 
 from typing import Dict, List, Tuple, Optional
+import random
 import numpy as np
 
 
@@ -325,6 +326,54 @@ def get_delegate_mapping(trial_index: int) -> Dict[str, str]:
         return ANSWER_OR_DELEGATE_OPTIONS_ANSWER_FIRST
     else:  # Even: 1=Delegate
         return ANSWER_OR_DELEGATE_OPTIONS_DELEGATE_FIRST
+
+
+def get_delegate_trial_indices(
+    num_questions: int,
+    seed: int = 42,
+    original_indices: Optional[List[int]] = None,
+    total_questions: Optional[int] = None,
+) -> List[int]:
+    """
+    Compute per-question trial_index values matching the legacy two-shuffle workflow.
+
+    If original_indices is provided, maps each local question to the trial index it
+    would have in the full dataset order after the legacy second shuffle.
+
+    Returns:
+        List where index = current question position and value = delegate trial_index.
+    """
+    if num_questions < 0:
+        raise ValueError(f"num_questions must be non-negative, got {num_questions}")
+
+    if original_indices is not None:
+        if len(original_indices) != num_questions:
+            raise ValueError(
+                f"len(original_indices)={len(original_indices)} must match num_questions={num_questions}"
+            )
+        if num_questions == 0:
+            return []
+        if total_questions is None:
+            total_questions = max(original_indices) + 1
+        if total_questions <= max(original_indices):
+            raise ValueError(
+                f"total_questions={total_questions} must be > max(original_indices)={max(original_indices)}"
+            )
+    else:
+        total_questions = num_questions
+
+    # Legacy behavior used a second seeded shuffle before assigning trial indices.
+    shuffled_positions = list(range(total_questions))
+    rng = random.Random(seed)
+    rng.shuffle(shuffled_positions)
+
+    trial_idx_by_question = [0] * total_questions
+    for trial_idx, original_pos in enumerate(shuffled_positions):
+        trial_idx_by_question[original_pos] = trial_idx
+
+    if original_indices is None:
+        return trial_idx_by_question
+    return [trial_idx_by_question[idx] for idx in original_indices]
 
 
 def format_answer_or_delegate_prompt(

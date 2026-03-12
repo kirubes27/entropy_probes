@@ -69,6 +69,7 @@ from tasks import (
     format_stated_confidence_prompt,
     format_answer_or_delegate_prompt,
     format_other_confidence_prompt,
+    get_delegate_trial_indices,
 )
 
 # =============================================================================
@@ -76,20 +77,20 @@ from tasks import (
 # =============================================================================
 
 # --- Model & Data ---
-MODEL = "meta-llama/Llama-3.1-8B-Instruct"
-ADAPTER = "Tristan-Day/ect_20251222_215412_v0uei7y1_2000"#None  # Optional: path to PEFT/LoRA adapter
+MODEL = "meta-llama/Llama-3.3-70B-Instruct"
+ADAPTER = None  # Optional: path to PEFT/LoRA adapter
 DATASET = "TriviaMC_difficulty_filtered"  # Dataset name (model prefix now in directory)
-META_TASK = "confidence"  # "confidence", "delegate", or "other_confidence"
+META_TASK = "delegate"  # Confirmatory default
 PROBE_POSITION = "final"  # Position from test_meta_transfer.py outputs
 METRIC = "logit_gap"  # Uncertainty metric for uncertainty directions
 
 # --- Quantization ---
-LOAD_IN_4BIT = False
+LOAD_IN_4BIT = True
 LOAD_IN_8BIT = False
 
 # --- Experiment ---
 SEED = 42  # Must match across scripts
-BATCH_SIZE = 2#4
+BATCH_SIZE = 2
 NUM_QUESTIONS = 100
 
 # Direction types to test
@@ -503,8 +504,8 @@ def load_all_direction_info(
 # DATASET LOADING
 # =============================================================================
 
-def load_questions(base_name: str, num_questions: int, model_dir: str = None) -> List[Dict]:
-    """Load question data from consolidated mc_results.json."""
+def load_questions(base_name: str, num_questions: int, model_dir: str = None) -> Tuple[List[Dict], np.ndarray, int]:
+    """Load question data from consolidated mc_results.json with original indices."""
     path = find_output_file(f"{base_name}_mc_results.json", model_dir=model_dir)
     if not path.exists():
         raise FileNotFoundError(f"Dataset not found: {path}")
@@ -518,7 +519,9 @@ def load_questions(base_name: str, num_questions: int, model_dir: str = None) ->
     if not questions:
         raise ValueError(f"No questions loaded from {path}")
 
-    return questions[:num_questions]
+    n_total = len(questions)
+    n_take = min(num_questions, n_total)
+    return questions[:n_take], np.arange(n_take), n_total
 
 
 # =============================================================================
@@ -1341,7 +1344,7 @@ def main():
 
     # Load questions
     print("\nLoading questions...")
-    questions = load_questions(DATASET, NUM_QUESTIONS, model_dir=model_dir)
+    questions, original_indices, total_questions = load_questions(DATASET, NUM_QUESTIONS, model_dir=model_dir)
     print(f"  Loaded {len(questions)} questions")
 
     # Load model
@@ -1359,11 +1362,25 @@ def main():
     # Prepare prompts (use meta-task prompts for the forward passes)
     print("\nPreparing meta-task prompts...")
     prompts = []
+    delegate_trial_indices = None
+    if META_TASK == "delegate":
+        delegate_trial_indices = get_delegate_trial_indices(
+            len(questions),
+            seed=SEED,
+            original_indices=original_indices.tolist(),
+            total_questions=total_questions,
+        )
     for q_idx, question in enumerate(questions):
         if META_TASK == "confidence":
             prompt, _ = format_stated_confidence_prompt(question, tokenizer, use_chat_template=use_chat_template)
         elif META_TASK == "delegate":
-            prompt, _, _ = format_answer_or_delegate_prompt(question, tokenizer, trial_index=q_idx, use_chat_template=use_chat_template)
+            trial_idx = delegate_trial_indices[q_idx]
+            prompt, _, _ = format_answer_or_delegate_prompt(
+                question,
+                tokenizer,
+                trial_index=trial_idx,
+                use_chat_template=use_chat_template,
+            )
         elif META_TASK == "other_confidence":
             prompt, _ = format_other_confidence_prompt(question, tokenizer, use_chat_template=use_chat_template)
         else:

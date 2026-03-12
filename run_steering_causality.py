@@ -74,6 +74,7 @@ from tasks import (
     get_stated_confidence_signal,
     format_answer_or_delegate_prompt,
     get_answer_or_delegate_signal,
+    get_delegate_trial_indices,
     format_other_confidence_prompt,
     get_other_confidence_signal,
     STATED_CONFIDENCE_OPTIONS,
@@ -87,11 +88,11 @@ from tasks import (
 # =============================================================================
 
 # --- Model & Data ---
-MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 ADAPTER = None  # Optional: LoRA adapter path (must match identify step if used)
 DATASET = "TriviaMC_difficulty_filtered"  # Dataset name (model prefix now in directory)
 METRIC = "logit_gap"  # Which metric's directions to test
-META_TASK = "confidence"  # "confidence", "delegate", or "other_confidence"
+META_TASK = "delegate"  # Confirmatory default
 PROBE_POSITION = "final"  # Position from test_meta_transfer.py outputs
 
 # Direction type to steer:
@@ -99,8 +100,15 @@ PROBE_POSITION = "final"  # Position from test_meta_transfer.py outputs
 # - "metamcuncert": Steer MC uncertainty directions found from meta activations (test_meta_transfer.py)
 DIRECTION_TYPE = "uncertainty"
 
+# Confidence signal used as steering outcome target.
+# - For META_TASK=delegate:
+#     * "prob"         -> P(Answer)
+#     * "logit_margin" -> logit(Answer) - logit(Delegate)
+# - For non-delegate tasks, falls back to probability-based signal.
+CONFIDENCE_SIGNAL = "logit_margin"
+
 # --- Quantization ---
-LOAD_IN_4BIT = False  # Set True for 70B+ models
+LOAD_IN_4BIT = True  # Set True for 70B+ models
 LOAD_IN_8BIT = False
 
 # --- Experiment ---
@@ -124,10 +132,11 @@ EXPANDED_BATCH_TARGET = 48
 LAYERS = None  # e.g., [20, 25, 30] for quick testing
 
 # Optional: specify which direction methods to test (None = both probe and mean_diff)
-METHODS = ["mean_diff"]  # e.g., ["mean_diff"] or ["probe"] to test just one
+METHODS = ["probe", "mean_diff"]  # Confirmatory: run both methods
 
 # Token positions to test (matching test_meta_transfer.py)
-PROBE_POSITIONS = ["final"]#["question_mark", "question_newline", "options_newline", "final"]
+# Exp4 primary: ["final"]; optional secondary run: ["options_newline"]
+PROBE_POSITIONS = ["final"]
 
 # Layer selection from transfer results (for non-final positions)
 TRANSFER_R2_THRESHOLD = 0.3  # Layers with R² >= this are tested for non-final positions
@@ -401,6 +410,20 @@ def get_expected_slope_sign(metric: str) -> int:
         return +1  # +direction = more confident
 
 
+def _compute_confidence_used(meta_task: str, probs_row, logits_row, mapping, signal_fn):
+    """Return (confidence_used, p_answer, logit_margin)."""
+    p_answer = signal_fn(probs_row, mapping)
+    if meta_task == "delegate" and logits_row is not None:
+        ans_idx = 0 if mapping.get("1") == "Answer" else 1
+        del_idx = 1 - ans_idx
+        logit_margin = float(logits_row[ans_idx] - logits_row[del_idx])
+        sig = str(CONFIDENCE_SIGNAL).lower()
+        if sig in {"logit_margin", "margin", "logitdiff", "logit_diff"}:
+            return logit_margin, p_answer, logit_margin
+        return p_answer, p_answer, logit_margin
+    return p_answer, p_answer, None
+
+
 # =============================================================================
 # STEERING EXPERIMENT
 # =============================================================================
@@ -417,6 +440,8 @@ def run_steering_for_method(
     use_chat_template: bool,
     layers: Optional[List[int]] = None,
     position: str = "final",
+    original_indices: Optional[np.ndarray] = None,
+    total_questions: Optional[int] = None,
 ) -> Dict:
     """
     Run steering experiment for a single direction method.
@@ -451,9 +476,24 @@ def run_steering_for_method(
     prompts = []
     mappings = []
     position_indices = []  # Per-prompt token index for steering
+    delegate_trial_indices = None
+    if meta_task == "delegate":
+        idx_list = original_indices.tolist() if isinstance(original_indices, np.ndarray) else original_indices
+        delegate_trial_indices = get_delegate_trial_indices(
+            len(questions),
+            seed=SEED,
+            original_indices=idx_list,
+            total_questions=total_questions,
+        )
     for q_idx, question in enumerate(questions):
         if meta_task == "delegate":
-            prompt, _, mapping = format_fn(question, tokenizer, trial_index=q_idx, use_chat_template=use_chat_template)
+            trial_idx = delegate_trial_indices[q_idx]
+            prompt, _, mapping = format_fn(
+                question,
+                tokenizer,
+                trial_index=trial_idx,
+                use_chat_template=use_chat_template,
+            )
         else:
             prompt, _ = format_fn(question, tokenizer, use_chat_template=use_chat_template)
             mapping = None
@@ -562,17 +602,22 @@ def run_steering_for_method(
                 with torch.inference_mode():
                     out = model(**baseline_inputs)
                     logits = out.logits[:, -1, :][:, option_token_ids]
+                    logits_np = logits.float().cpu().numpy()
                     probs = torch.softmax(logits, dim=-1).float().cpu().numpy()
 
                 for i, q_idx in enumerate(batch_indices):
                     p = probs[i]
                     resp = options[np.argmax(p)]
-                    conf = signal_fn(p, mappings[q_idx])
+                    conf, p_answer, logit_margin = _compute_confidence_used(
+                        meta_task, p, logits_np[i], mappings[q_idx], signal_fn
+                    )
                     m_val = metric_values[q_idx]
                     baseline_results[q_idx] = {
                         "question_idx": q_idx,
                         "response": resp,
                         "confidence": float(conf),
+                        "p_answer": float(p_answer),
+                        "logit_margin": (float(logit_margin) if logit_margin is not None else None),
                         "metric": float(m_val),
                     }
 
@@ -624,6 +669,7 @@ def run_steering_for_method(
                     with torch.inference_mode():
                         out = model(**current_inputs)
                         logits = out.logits[:, -1, :][:, option_token_ids]
+                        logits_np = logits.float().cpu().numpy()
                         probs = torch.softmax(logits, dim=-1).float().cpu().numpy()
 
                     # Store results
@@ -632,12 +678,16 @@ def run_steering_for_method(
                             idx = i * k_mult + j
                             p = probs[idx]
                             resp = options[np.argmax(p)]
-                            conf = signal_fn(p, mappings[q_idx])
+                            conf, p_answer, logit_margin = _compute_confidence_used(
+                                meta_task, p, logits_np[idx], mappings[q_idx], signal_fn
+                            )
                             m_val = metric_values[q_idx]
                             result_dict[mult][q_idx] = {
                                 "question_idx": q_idx,
                                 "response": resp,
                                 "confidence": float(conf),
+                                "p_answer": float(p_answer),
+                                "logit_margin": (float(logit_margin) if logit_margin is not None else None),
                                 "metric": float(m_val),
                             }
 
@@ -683,17 +733,22 @@ def run_steering_for_method(
                 with torch.inference_mode():
                     out = model(**batch_inputs)
                     logits = out.logits[:, -1, :][:, option_token_ids]
+                    logits_np = logits.float().cpu().numpy()
                     probs = torch.softmax(logits, dim=-1).float().cpu().numpy()
 
                 for i, q_idx in enumerate(batch_indices):
                     p = probs[i]
                     resp = options[np.argmax(p)]
-                    conf = signal_fn(p, mappings[q_idx])
+                    conf, p_answer, logit_margin = _compute_confidence_used(
+                        meta_task, p, logits_np[i], mappings[q_idx], signal_fn
+                    )
                     m_val = metric_values[q_idx]
                     baseline_results[q_idx] = {
                         "question_idx": q_idx,
                         "response": resp,
                         "confidence": float(conf),
+                        "p_answer": float(p_answer),
+                        "logit_margin": (float(logit_margin) if logit_margin is not None else None),
                         "metric": float(m_val),
                     }
 
@@ -738,6 +793,7 @@ def run_steering_for_method(
                         with torch.inference_mode():
                             out = model(**expanded_inputs)
                             logits = out.logits[:, -1, :][:, option_token_ids]
+                            logits_np = logits.float().cpu().numpy()
                             probs = torch.softmax(logits, dim=-1).float().cpu().numpy()
 
                         # Store results
@@ -746,12 +802,16 @@ def run_steering_for_method(
                                 idx = i * k_mult + j
                                 p = probs[idx]
                                 resp = options[np.argmax(p)]
-                                conf = signal_fn(p, mappings[q_idx])
+                                conf, p_answer, logit_margin = _compute_confidence_used(
+                                    meta_task, p, logits_np[idx], mappings[q_idx], signal_fn
+                                )
                                 m_val = metric_values[q_idx]
                                 result_dict[mult][q_idx] = {
                                     "question_idx": q_idx,
                                     "response": resp,
                                     "confidence": float(conf),
+                                    "p_answer": float(p_answer),
+                                    "logit_margin": (float(logit_margin) if logit_margin is not None else None),
                                     "metric": float(m_val),
                                 }
                     finally:
@@ -1267,19 +1327,21 @@ def main():
     print("\nLoading dataset...")
     dataset = load_dataset(DATASET, model_dir=model_dir)
     all_data = dataset["data"]
+    n_total = len(all_data)
 
     if USE_TRANSFER_SPLIT:
         # Use same 80/20 split as transfer analysis for apples-to-apples comparison
-        n_total = len(all_data)
         indices = np.arange(n_total)
         train_idx, test_idx = train_test_split(
             indices, train_size=TRAIN_SPLIT, random_state=SEED
         )
         data_items = [all_data[i] for i in test_idx]
+        original_indices = test_idx
         print(f"  Using transfer test split: {len(data_items)} questions (from {n_total} total, seed={SEED})")
     else:
         # Legacy behavior: first NUM_QUESTIONS
         data_items = all_data[:NUM_QUESTIONS]
+        original_indices = np.arange(len(data_items))
         print(f"  Using first {len(data_items)} questions (legacy mode)")
 
     questions = data_items
@@ -1402,6 +1464,8 @@ def main():
                 use_chat_template=use_chat_template,
                 layers=method_layers,
                 position=position,
+                original_indices=original_indices,
+                total_questions=n_total,
             )
             all_results_by_position[position][method] = results
 
@@ -1485,6 +1549,7 @@ def main():
                 num_controls_nonfinal=NUM_CONTROLS_NONFINAL,
                 transfer_r2_threshold=TRANSFER_R2_THRESHOLD,
                 multipliers=STEERING_MULTIPLIERS,
+                confidence_signal=CONFIDENCE_SIGNAL,
                 method=method,
                 positions_tested=PROBE_POSITIONS,
             ),

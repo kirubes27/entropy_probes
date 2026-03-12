@@ -44,7 +44,6 @@ from tqdm import tqdm
 from scipy.stats import pearsonr, spearmanr
 from sklearn.model_selection import train_test_split
 import joblib
-import random
 
 from core import (
     load_model_and_tokenizer,
@@ -83,6 +82,7 @@ from tasks import (
     get_stated_confidence_signal,
     get_answer_or_delegate_signal,
     get_other_confidence_signal,
+    get_delegate_trial_indices,
     STATED_CONFIDENCE_OPTIONS,
     ANSWER_OR_DELEGATE_OPTIONS,
     OTHER_CONFIDENCE_OPTIONS,
@@ -104,14 +104,14 @@ from tasks import (
 
 # --- Model & Data ---
 # Must match the identify_mc_correlate.py settings that produced Stage 1 files
-MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 DATASET = "TriviaMC_difficulty_filtered"
 ADAPTER = None  # "Tristan-Day/ect_20251222_215412_v0uei7y1_2000" #
-METRICS = ["logit_gap", "entropy"]  # Which metrics to test transfer for
-META_TASK = "confidence"  # "confidence", "other_confidence", or "delegate"
+METRICS = ["logit_gap", "top_logit", "entropy"]  # Exp1/Exp2 confirmatory metric set
+META_TASK = "delegate"  # Confirmatory default; switch per runbook when needed
 
 # --- Quantization ---
-LOAD_IN_4BIT = False  # Set True for 70B+ models
+LOAD_IN_4BIT = True  # Set True for 70B+ models
 LOAD_IN_8BIT = False
 
 # --- Experiment ---
@@ -127,8 +127,8 @@ TRAIN_SPLIT = 0.8            # Must match across scripts
 # --- Skip transfer training (use when you only want confdir/mcuncert with different settings) ---
 SKIP_TRANSFER_TRAINING = False  # Set True to skip main D→M transfer, only do confdir/mcuncert
 
-# --- Confidence directions (optional, merged from identify_confidence_correlate.py) ---
-FIND_CONFIDENCE_DIRECTIONS = True  # Train probes on stated confidence from meta activations
+# --- Confidence directions (optional, merged from legacy standalone script) ---
+FIND_CONFIDENCE_DIRECTIONS = False  # Not required for canonical Exp1-Exp4; enable for confdir analyses
 MEAN_DIFF_QUANTILE = 0.25          # Must match across scripts
 COMPARE_UNCERTAINTY_METRIC = METRICS[0]  # Compare confidence vs uncertainty dirs (None to skip)
 DELEGATE_CONFDIR_TARGET = "logit_margin"  # "p_answer" or "logit_margin" (only for delegate task)
@@ -136,20 +136,20 @@ DELEGATE_CONFDIR_TARGET = "logit_margin"  # "p_answer" or "logit_margin" (only f
 # --- MC Uncertainty directions from meta activations ---
 # Train probes on meta-task activations to predict MC uncertainty (logit_gap, entropy)
 # This finds d_meta→mc_uncertainty and compares to d_mc_uncertainty via cosine similarity
-FIND_MC_UNCERTAINTY_DIRECTIONS = True
+FIND_MC_UNCERTAINTY_DIRECTIONS = False
 MC_UNCERTAINTY_METRICS = ["logit_gap", "entropy"]  # Which MC metrics to predict from meta activations
 
 # --- Meta-MCQ Answer directions from meta activations ---
 # Train classifiers on meta-task activations to predict MC answer (A/B/C/D)
 # Tests whether answer representation is encoded in meta-task context
 # Compares M2M direction to D2D direction (from identify_mc_correlate.py) via cosine similarity
-FIND_META_MCQ_DIRECTIONS = True
+FIND_META_MCQ_DIRECTIONS = False
 
 # --- Meta Output Entropy directions ---
 # Train probes on meta-task activations to predict meta output entropy
 # (entropy over Answer/Delegate for delegate task, or over S-Z for confidence task)
 # Tests: Is the model's uncertainty representation shared across tasks?
-FIND_META_OUTPUT_UNCERTAINTY_DIRECTIONS = True
+FIND_META_OUTPUT_UNCERTAINTY_DIRECTIONS = False
 META_OUTPUT_UNCERTAINTY_METRICS = ["entropy", "logit_gap"]  # Which meta output metrics to analyze
 
 # --- Script-specific ---
@@ -1472,19 +1472,8 @@ def main():
         # Get questions
         questions = dataset["questions"]
 
-        # Compute trial_idx mapping to match OLD workflow
-        # OLD workflow (run_introspection_experiment.py:2615-2616) applies a second shuffle:
-        #   random.seed(SEED); random.shuffle(questions)
-        # This affects which trial_idx each question gets, which determines the 1/2 mapping
-        # in delegate prompts. We don't actually shuffle (to preserve alignment with direct
-        # activations), but we compute what trial_idx each question WOULD have in OLD order.
-        indexed_questions = list(enumerate(questions))  # [(orig_idx, question), ...]
-        random.seed(SEED)
-        random.shuffle(indexed_questions)
-        # old_trial_idx[i] = what trial_idx question at position i would have in OLD workflow
-        old_trial_idx = [None] * len(questions)
-        for new_pos, (orig_idx, _) in enumerate(indexed_questions):
-            old_trial_idx[orig_idx] = new_pos
+        # Compute trial_idx mapping to match OLD workflow's second seeded shuffle.
+        old_trial_idx = get_delegate_trial_indices(len(questions), seed=SEED)
 
         # Get meta task setup
         format_fn = get_meta_format_fn(META_TASK)
@@ -2138,7 +2127,7 @@ def main():
 
     else:
         print(f"\n  No answer classifiers found at {answer_probes_path}")
-        print("  Run identify_mc_answer_correlate.py first.")
+        print("  Run identify_mc_correlate.py with FIND_ANSWER_DIRECTIONS=True first.")
 
     # For backward compatibility, use "final" position for legacy results
     mean_diff_transfer_results = mean_diff_transfer_by_pos.get("final", mean_diff_transfer_by_pos.get(positions_available[0], {}))

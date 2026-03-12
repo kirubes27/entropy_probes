@@ -72,7 +72,7 @@ from tasks import format_direct_prompt
 MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 ADAPTER = None  # Optional: path to PEFT/LoRA adapter
 DATASET = "TriviaMC_difficulty_filtered"
-METRICS = ["logit_gap"]  # Which metrics to analyze
+METRICS = ["logit_gap", "top_logit", "entropy"]  # Confirmatory Exp1/Exp2 metric set
 NUM_QUESTIONS = 500
 
 # --- Quantization ---

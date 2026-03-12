@@ -4,15 +4,15 @@ also predict other-confidence equally well, determining if the model has genuine
 distinct representations for "how confident am I?" vs "how hard is this for others?"
 
 Inputs:
-    outputs/{base}_meta_{task}_confidence_directions.npz      Confidence directions (self and other)
-    outputs/{base}_meta_{task}_activations.npz                Activations for confidence tasks
+    outputs/{model_dir}/working/{base}_meta_{task}_confdir_probes_{pos}.joblib   Confidence probes (self and other)
+    outputs/{model_dir}/working/{base}_meta_{task}_activations.npz              Activations for confidence tasks
 
 Outputs:
-    outputs/{base}_cross_confidence_results.json    Full cross-prediction metrics per layer
-    outputs/{base}_cross_confidence_results.png     Multi-panel visualization
+    outputs/{model_dir}/results/{base}_confidence_cross_prediction.json    Full cross-prediction metrics per layer
+    outputs/{model_dir}/results/{base}_confidence_cross_prediction.png     Multi-panel visualization
 
 Run after: test_meta_transfer.py (with FIND_CONFIDENCE_DIRECTIONS=True for both
-           self and other tasks)
+           META_TASK='confidence' and META_TASK='other_confidence')
 """
 
 from pathlib import Path
@@ -33,11 +33,14 @@ from core.plotting import save_figure, GRID_ALPHA, CI_ALPHA
 
 MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 ADAPTER = None
-LOAD_IN_4BIT = False
+LOAD_IN_4BIT = True
 LOAD_IN_8BIT = False
 DATASET = "TriviaMC_difficulty_filtered"
 
-# Train/test split (must match identify_confidence_correlate.py)
+# Position to use for probes (must match test_meta_transfer.py run)
+POSITION = "final"
+
+# Train/test split (must match test_meta_transfer.py)
 TRAIN_SPLIT = 0.8
 SEED = 42
 
@@ -138,13 +141,26 @@ def plot_cross_prediction_results(results: dict, num_layers: int, output_path: P
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle("Self vs Other Confidence Cross-Prediction", fontsize=14, fontweight='bold')
 
-    layers = list(range(num_layers))
+    by_layer = results["by_layer"]
+    layer_int_keys = sorted(int(k) for k in by_layer.keys())
+    if not layer_int_keys:
+        raise ValueError("No layer results available to plot")
+    layers = layer_int_keys
+
+    def _get_layer_result(layer: int) -> dict:
+        # JSON serialization turns integer dict keys into strings.
+        if layer in by_layer:
+            return by_layer[layer]
+        layer_str = str(layer)
+        if layer_str in by_layer:
+            return by_layer[layer_str]
+        raise KeyError(f"Layer {layer} not found in results['by_layer']")
 
     # Extract data - use Pearson correlation (scale-invariant) instead of R²
-    self_to_self = [results["by_layer"][l]["self_to_self"]["pearson"] for l in layers]
-    self_to_other = [results["by_layer"][l]["self_to_other"]["pearson"] for l in layers]
-    other_to_self = [results["by_layer"][l]["other_to_self"]["pearson"] for l in layers]
-    other_to_other = [results["by_layer"][l]["other_to_other"]["pearson"] for l in layers]
+    self_to_self = [_get_layer_result(l)["self_to_self"]["pearson"] for l in layers]
+    self_to_other = [_get_layer_result(l)["self_to_other"]["pearson"] for l in layers]
+    other_to_self = [_get_layer_result(l)["other_to_self"]["pearson"] for l in layers]
+    other_to_other = [_get_layer_result(l)["other_to_other"]["pearson"] for l in layers]
 
     # Panel 1: Layer-wise Pearson correlation (top-left)
     ax1 = axes[0, 0]
@@ -164,14 +180,15 @@ def plot_cross_prediction_results(results: dict, num_layers: int, output_path: P
 
     # Panel 2: Transfer matrix heatmap at best layer (top-right)
     ax2 = axes[0, 1]
-    best_layer = results["summary"]["best_layer"]
+    best_layer = int(results["summary"]["best_layer"])
+    best_layer_result = _get_layer_result(best_layer)
     ax2.set_title(f"Transfer Matrix at Best Layer (L{best_layer})", fontsize=11)
 
     matrix = np.array([
-        [results["by_layer"][best_layer]["self_to_self"]["pearson"],
-         results["by_layer"][best_layer]["self_to_other"]["pearson"]],
-        [results["by_layer"][best_layer]["other_to_self"]["pearson"],
-         results["by_layer"][best_layer]["other_to_other"]["pearson"]]
+        [best_layer_result["self_to_self"]["pearson"],
+         best_layer_result["self_to_other"]["pearson"]],
+        [best_layer_result["other_to_self"]["pearson"],
+         best_layer_result["other_to_other"]["pearson"]]
     ])
 
     im = ax2.imshow(matrix, cmap='RdYlGn', vmin=-1.0, vmax=1.0)
@@ -196,10 +213,11 @@ def plot_cross_prediction_results(results: dict, num_layers: int, output_path: P
     self_spec = []
     other_spec = []
     for l in layers:
-        s2s = results["by_layer"][l]["self_to_self"]["pearson"]
-        s2o = results["by_layer"][l]["self_to_other"]["pearson"]
-        o2o = results["by_layer"][l]["other_to_other"]["pearson"]
-        o2s = results["by_layer"][l]["other_to_self"]["pearson"]
+        layer_result = _get_layer_result(l)
+        s2s = layer_result["self_to_self"]["pearson"]
+        s2o = layer_result["self_to_other"]["pearson"]
+        o2o = layer_result["other_to_other"]["pearson"]
+        o2s = layer_result["other_to_self"]["pearson"]
 
         # Specificity = |within| / |cross| (use absolute values since Pearson can be negative)
         if abs(s2o) > 0.01:
@@ -217,7 +235,9 @@ def plot_cross_prediction_results(results: dict, num_layers: int, output_path: P
 
     ax3.set_xlabel("Layer Index")
     ax3.set_ylabel("Specificity Ratio (|within| / |cross|)")
-    ax3.set_ylim(0, max(5, np.nanmax(self_spec + other_spec) * 1.1) if self_spec or other_spec else 5)
+    finite_spec = [v for v in (self_spec + other_spec) if np.isfinite(v)]
+    y_max = max(5, max(finite_spec) * 1.1) if finite_spec else 5
+    ax3.set_ylim(0, y_max)
     ax3.legend(loc='upper right')
     ax3.grid(True, alpha=GRID_ALPHA)
 
@@ -270,8 +290,10 @@ def main():
     print()
 
     # Construct file paths using centralized path management
-    self_probes_path = find_output_file(f"{DATASET}_confidence_confidence_probes.joblib", model_dir=model_dir)
-    other_probes_path = find_output_file(f"{DATASET}_other_confidence_confidence_probes.joblib", model_dir=model_dir)
+    # Probe files produced by test_meta_transfer.py (FIND_CONFIDENCE_DIRECTIONS=True)
+    # Pattern: {DATASET}_meta_{task}_confdir_probes_{pos}.joblib  (confdir_suffix="" for non-delegate)
+    self_probes_path = find_output_file(f"{DATASET}_meta_confidence_confdir_probes_{POSITION}.joblib", model_dir=model_dir)
+    other_probes_path = find_output_file(f"{DATASET}_meta_other_confidence_confdir_probes_{POSITION}.joblib", model_dir=model_dir)
     self_acts_path = find_output_file(f"{DATASET}_meta_confidence_activations.npz", model_dir=model_dir)
     other_acts_path = find_output_file(f"{DATASET}_meta_other_confidence_activations.npz", model_dir=model_dir)
 
@@ -284,16 +306,14 @@ def main():
         (other_acts_path, "other-confidence activations"),
     ]:
         if not path.exists():
-            missing.append(f"  {desc}: {path.name}")
+            missing.append(f"  {desc}: {path}")
 
     if missing:
         print("ERROR: Missing required files:")
         print("\n".join(missing))
-        print("\nRun these scripts first:")
-        print("  1. test_meta_transfer.py with META_TASK='confidence'")
-        print("  2. test_meta_transfer.py with META_TASK='other_confidence'")
-        print("  3. identify_confidence_correlate.py with META_TASK='confidence'")
-        print("  4. identify_confidence_correlate.py with META_TASK='other_confidence'")
+        print("\nRun test_meta_transfer.py with FIND_CONFIDENCE_DIRECTIONS=True for each task:")
+        print("  1. META_TASK='confidence'       (produces self probes + activations)")
+        print("  2. META_TASK='other_confidence'  (produces other probes + activations)")
         return
 
     # Load probes
@@ -309,11 +329,11 @@ def main():
 
     # Load activations
     print(f"\nLoading self-confidence activations from {self_acts_path}...")
-    self_acts, self_conf, num_layers_self = load_activations_and_confidence(self_acts_path)
+    self_acts, self_conf, num_layers_self = load_activations_and_confidence(self_acts_path, position=POSITION)
     print(f"  Shape: {self_acts[0].shape}, confidence: mean={self_conf.mean():.3f}, std={self_conf.std():.3f}")
 
     print(f"Loading other-confidence activations from {other_acts_path}...")
-    other_acts, other_conf, num_layers_other = load_activations_and_confidence(other_acts_path)
+    other_acts, other_conf, num_layers_other = load_activations_and_confidence(other_acts_path, position=POSITION)
     print(f"  Shape: {other_acts[0].shape}, confidence: mean={other_conf.mean():.3f}, std={other_conf.std():.3f}")
 
     num_layers = min(num_layers_self, num_layers_other, len(self_probes), len(other_probes))
@@ -324,7 +344,7 @@ def main():
     n_other = len(other_conf)
     print(f"  Self samples: {n_self}, Other samples: {n_other}")
 
-    # Use same split as identify_confidence_correlate.py
+    # Use same split as test_meta_transfer.py
     _, test_idx_self = train_test_split(
         np.arange(n_self), train_size=TRAIN_SPLIT, random_state=SEED, shuffle=True
     )
@@ -408,6 +428,9 @@ def main():
 
         if layer % 10 == 0:
             print(f"  Layer {layer}: s→s={s2s['pearson']:.3f}, s→o={s2o['pearson']:.3f}, o→s={o2s['pearson']:.3f}, o→o={o2o['pearson']:.3f}")
+
+    if not results_by_layer:
+        raise ValueError("No overlapping probe layers found between self and other runs")
 
     # Find best layer (by average within-task Pearson)
     best_layer = max(

@@ -435,15 +435,18 @@ def load_and_format_truthfulqa(num_questions_needed=None, split="validation", sk
             break
 
         item = dataset[idx]
+        question_text = item.get('question')
+        if not isinstance(question_text, str) or len(question_text.strip()) == 0:
+            continue
+
         potential_id = f"tqa_{split}_{text_to_id(question_text)}"
         if potential_id in question_ids_added:
             continue
 
-        question_text = item.get('question')
         if skip_questions is not None and question_text in skip_questions:
             continue
         best_answer = item.get('best_answer')
-        if len(best_answer.strip()) == 0:
+        if not isinstance(best_answer, str) or len(best_answer.strip()) == 0:
             continue
         incorrect_answers = item.get('incorrect_answers')
 

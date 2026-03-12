@@ -63,6 +63,7 @@ from tasks import (
     format_stated_confidence_prompt,
     ANSWER_OR_DELEGATE_OPTIONS,
     format_answer_or_delegate_prompt,
+    get_delegate_trial_indices,
     response_to_confidence,
     # Other-confidence task (control)
     OTHER_CONFIDENCE_OPTIONS,
@@ -77,20 +78,20 @@ from tasks import (
 # =============================================================================
 
 # --- Model & Data ---
-MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 ADAPTER = None  # Set to adapter path if using fine-tuned model
-DATASET = "SimpleMC"  # Dataset name (model prefix now in directory)
-META_TASK = "confidence"  # "confidence", "delegate", or "other_confidence"
+DATASET = "TriviaMC_difficulty_filtered"  # Dataset name (model prefix now in directory)
+META_TASK = "delegate"  # Confirmatory default for optional Exp5
 METRIC = "logit_gap"  # Metric for selecting pairs
 AVAILABLE_METRICS = ["entropy", "top_prob", "margin", "logit_gap", "top_logit"]
 
 # --- Quantization ---
-LOAD_IN_4BIT = False  # Set True for 70B+ models
+LOAD_IN_4BIT = True  # Set True for 70B+ models
 LOAD_IN_8BIT = False
 
 # --- Experiment ---
 SEED = 42                    # Must match across scripts
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 NUM_PATCH_PAIRS = 100        # Number of source->target pairs to test per layer
 PAIRING_METHOD = "extremes"  # "extremes", "random", or "quartile"
 PATCHING_LAYERS = None       # None = auto-select based on probe transfer
@@ -265,7 +266,10 @@ def format_meta_prompt_for_question(
     """Format meta prompt based on META_TASK."""
     if META_TASK == "delegate":
         prompt, options, mapping = format_answer_or_delegate_prompt(
-            question, tokenizer, use_chat_template, trial_idx
+            question,
+            tokenizer,
+            trial_index=trial_idx,
+            use_chat_template=use_chat_template,
         )
         return prompt, options, mapping
     elif META_TASK == "other_confidence":
@@ -325,6 +329,7 @@ def run_patching_experiment(
     layers: List[int],
     patch_pairs: List[Tuple[int, int]],
     use_chat_template: bool,
+    delegate_trial_indices: Optional[List[int]] = None,
     batch_size: int = BATCH_SIZE
 ) -> Dict:
     """
@@ -378,7 +383,13 @@ def run_patching_experiment(
     all_prompts = []
     all_mappings = []
     for i, q in enumerate(questions):
-        prompt, _, mapping = format_meta_prompt_for_question(q, tokenizer, use_chat_template, i)
+        trial_idx = delegate_trial_indices[i] if delegate_trial_indices is not None else i
+        prompt, _, mapping = format_meta_prompt_for_question(
+            q,
+            tokenizer,
+            use_chat_template,
+            trial_idx,
+        )
         all_prompts.append(prompt)
         all_mappings.append(mapping)
 
@@ -1556,6 +1567,24 @@ def main():
     questions = paired_data["questions"]
     print(f"Loaded {len(questions)} questions")
 
+    delegate_trial_indices = None
+    if META_TASK == "delegate":
+        original_indices = paired_data.get("original_indices")
+        total_questions = paired_data.get("total_questions")
+        if original_indices is not None and len(original_indices) == len(questions):
+            delegate_trial_indices = get_delegate_trial_indices(
+                num_questions=len(questions),
+                seed=SEED,
+                original_indices=original_indices,
+                total_questions=total_questions,
+            )
+        else:
+            delegate_trial_indices = get_delegate_trial_indices(
+                num_questions=len(questions),
+                seed=SEED,
+            )
+        print("Using standardized delegate trial-index mapping")
+
     # Load metric values
     if "direct_metrics" in paired_data and METRIC in paired_data["direct_metrics"]:
         metric_values = np.array(paired_data["direct_metrics"][METRIC])
@@ -1649,7 +1678,7 @@ def main():
         print(f"\nRunning patching experiment ({dir_label})...")
         results = run_patching_experiment(
             model, tokenizer, questions, cached_activations, metric_values,
-            layers, patch_pairs, use_chat_template, BATCH_SIZE
+            layers, patch_pairs, use_chat_template, delegate_trial_indices, BATCH_SIZE
         )
         results["direction"] = direction
         results["config"] = get_config_dict(
