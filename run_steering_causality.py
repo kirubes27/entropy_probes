@@ -156,7 +156,12 @@ torch.manual_seed(SEED)
 # TRANSFER RESULTS LOADING (for layer selection)
 # =============================================================================
 
-def load_transfer_results(base_name: str, meta_task: str, model_dir: str) -> Optional[Dict]:
+def load_transfer_results(
+    base_name: str,
+    meta_task: str,
+    model_dir: str,
+    position: str = "final",
+) -> Optional[Dict]:
     """
     Load transfer results JSON to get per-layer R² values.
 
@@ -164,15 +169,54 @@ def load_transfer_results(base_name: str, meta_task: str, model_dir: str) -> Opt
     """
     path = TRANSFER_RESULTS_PATH
     if path is None:
-        path = find_output_file(f"{base_name}_meta_{meta_task}_transfer_results_{PROBE_POSITION}.json", model_dir=model_dir)
+        path = find_output_file(
+            f"{base_name}_meta_{meta_task}_transfer_results_{position}.json",
+            model_dir=model_dir,
+        )
     else:
-        path = Path(path)
+        raw_path = str(path).format(position=position, pos=position)
+        path = Path(raw_path)
+        if path.is_dir():
+            path = path / f"{base_name}_meta_{meta_task}_transfer_results_{position}.json"
+        elif "_transfer_results_" in path.name:
+            prefix, suffix = path.name.rsplit("_transfer_results_", 1)
+            extension = ""
+            if "." in suffix:
+                extension = "." + suffix.split(".", 1)[1]
+            path = path.with_name(f"{prefix}_transfer_results_{position}{extension}")
 
     if not path.exists():
         return None
 
     with open(path, "r") as f:
         return json.load(f)
+
+
+def _get_transfer_metric_section(
+    transfer_data: Dict,
+    metric: str,
+    position: str,
+    method: str,
+) -> Optional[Dict]:
+    """Extract metric transfer section across current and legacy JSON schemas."""
+    if method == "mean_diff":
+        current_key = "mean_diff_transfer"
+        legacy_key = "mean_diff_by_position"
+    else:
+        current_key = "transfer"
+        legacy_key = "transfer_by_position"
+
+    # Current schema: one file per position.
+    if current_key in transfer_data and metric in transfer_data[current_key]:
+        return transfer_data[current_key][metric]
+
+    # Legacy schema: one file contains all positions.
+    if legacy_key in transfer_data and position in transfer_data[legacy_key]:
+        pos_data = transfer_data[legacy_key][position]
+        if metric in pos_data:
+            return pos_data[metric]
+
+    return None
 
 
 def get_layers_from_transfer(
@@ -195,27 +239,9 @@ def get_layers_from_transfer(
     Returns:
         Sorted list of layer indices meeting threshold
     """
-    # Select the appropriate section based on method
-    if method == "mean_diff":
-        section_key = "mean_diff_by_position"
-        legacy_key = None  # No legacy fallback for mean_diff
-    else:
-        section_key = "transfer_by_position"
-        legacy_key = "transfer"
-
-    # Try position-specific data first
-    if section_key in transfer_data and position in transfer_data[section_key]:
-        pos_data = transfer_data[section_key][position]
-    elif legacy_key and legacy_key in transfer_data:
-        # Fall back to legacy format (final position only, probe only)
-        pos_data = transfer_data[legacy_key]
-    else:
+    metric_data = _get_transfer_metric_section(transfer_data, metric, position, method)
+    if metric_data is None:
         return []
-
-    if metric not in pos_data:
-        return []
-
-    metric_data = pos_data[metric]
     per_layer = metric_data.get("per_layer", {})
 
     selected = []
@@ -1350,27 +1376,51 @@ def main():
     print(f"  {METRIC}: mean={metric_values.mean():.3f}, std={metric_values.std():.3f}")
 
     # Load transfer results for layer selection (non-final positions)
-    transfer_data = load_transfer_results(DATASET, META_TASK, model_dir=model_dir)
-    if transfer_data is not None:
+    transfer_positions = set(PROBE_POSITIONS)
+    if any(pos != "final" for pos in PROBE_POSITIONS):
+        transfer_positions.add("final")
+
+    transfer_data_by_position: Dict[str, Optional[Dict]] = {}
+    for position in transfer_positions:
+        transfer_data_by_position[position] = load_transfer_results(
+            DATASET, META_TASK, model_dir=model_dir, position=position
+        )
+
+    if any(data is not None for data in transfer_data_by_position.values()):
         print(f"\nLoaded transfer results for layer selection")
         # Preview what layers would be selected FOR EACH (POSITION, METHOD) combination
         for pos in PROBE_POSITIONS:
             if pos == "final":
                 print(f"  {pos}: all layers (no R² filter)")
             else:
+                transfer_data = transfer_data_by_position.get(pos)
+                final_transfer_data = transfer_data_by_position.get("final")
                 for method in methods:
-                    pos_layers = get_layers_from_transfer(transfer_data, METRIC, pos, TRANSFER_R2_THRESHOLD, method)
+                    if transfer_data is not None:
+                        pos_layers = get_layers_from_transfer(
+                            transfer_data, METRIC, pos, TRANSFER_R2_THRESHOLD, method
+                        )
+                    else:
+                        pos_layers = []
+
                     if pos_layers:
                         print(f"  {pos}/{method}: {len(pos_layers)} layers with {METRIC} R²≥{TRANSFER_R2_THRESHOLD}: {pos_layers}")
                     else:
-                        # Try fallback to final
-                        fallback_layers = get_layers_from_transfer(transfer_data, METRIC, "final", TRANSFER_R2_THRESHOLD, method)
+                        # Try fallback to final transfer file
+                        fallback_layers = []
+                        if final_transfer_data is not None:
+                            fallback_layers = get_layers_from_transfer(
+                                final_transfer_data, METRIC, "final", TRANSFER_R2_THRESHOLD, method
+                            )
                         if fallback_layers:
                             print(f"  {pos}/{method}: no position-specific data, using final: {len(fallback_layers)} layers")
                         else:
                             print(f"  {pos}/{method}: WARNING - no layers found, will use ALL layers")
     else:
-        expected_path = find_output_file(f"{DATASET}_meta_{META_TASK}_transfer_results_{PROBE_POSITION}.json", model_dir=model_dir)
+        expected_path = find_output_file(
+            f"{DATASET}_meta_{META_TASK}_transfer_results_{PROBE_POSITION}.json",
+            model_dir=model_dir,
+        )
         print(f"\nNo transfer results found - will use all layers for all positions")
         print(f"  Expected: {expected_path}")
 
@@ -1425,16 +1475,24 @@ def main():
                 method_layers = all_available_layers
             else:
                 # Non-final position: select based on transfer R² for THIS method
+                transfer_data = transfer_data_by_position.get(position)
+                final_transfer_data = transfer_data_by_position.get("final")
                 if transfer_data is not None:
                     method_layers = get_layers_from_transfer(
                         transfer_data, METRIC, position, TRANSFER_R2_THRESHOLD, method
                     )
-                    if not method_layers:
-                        # Fall back to "final" position transfer data if position-specific not available
-                        method_layers = get_layers_from_transfer(
-                            transfer_data, METRIC, "final", TRANSFER_R2_THRESHOLD, method
-                        )
+                elif final_transfer_data is not None:
+                    method_layers = []
                 else:
+                    method_layers = all_available_layers
+
+                if not method_layers and final_transfer_data is not None:
+                    # Fall back to "final" transfer file if requested position has no qualifying layers
+                    method_layers = get_layers_from_transfer(
+                        final_transfer_data, METRIC, "final", TRANSFER_R2_THRESHOLD, method
+                    )
+
+                if not method_layers and final_transfer_data is None and transfer_data is None:
                     method_layers = all_available_layers
 
                 if not method_layers:
