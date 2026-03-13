@@ -4046,8 +4046,9 @@ def main():
                 json.dump(checkpoint_json, f, indent=2)
 
     def get_base_output(method: str) -> str:
-        """Get base output path for a specific method (without position - added per file)."""
-        base = f"{base_name}_ablation_{META_TASK}_{dir_suffix}_{method}{cross_suffix}"
+        """Get base output path for a specific method, namespaced by tested positions."""
+        positions_tag = "pos-" + "-".join(PROBE_POSITIONS)
+        base = f"{base_name}_ablation_{META_TASK}_{dir_suffix}_{method}_{positions_tag}{cross_suffix}"
         # Add confidence signal to filename when non-default (for delegate task)
         if META_TASK == "delegate" and CONFIDENCE_SIGNAL != "prob":
             base += f"_{CONFIDENCE_SIGNAL}"

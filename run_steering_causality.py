@@ -1522,8 +1522,12 @@ def main():
     dir_suffix = f"{DIRECTION_TYPE}_{METRIC}" if DIRECTION_TYPE == "uncertainty" else DIRECTION_TYPE
 
     def get_base_output(method: str) -> str:
-        """Get base output path for a specific method (without position - added per file)."""
-        return f"{DATASET}_steering_{META_TASK}_{dir_suffix}_{method}"
+        """Get base output path for a specific method, namespaced by tested positions/readout."""
+        positions_tag = "pos-" + "-".join(PROBE_POSITIONS)
+        base = f"{DATASET}_steering_{META_TASK}_{dir_suffix}_{method}_{positions_tag}"
+        if META_TASK == "delegate" and CONFIDENCE_SIGNAL != "prob":
+            base += f"_{CONFIDENCE_SIGNAL}"
+        return base
 
     # Save JSON results - one file per method
     print("\nSaving results...")
