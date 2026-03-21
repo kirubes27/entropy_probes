@@ -105,7 +105,7 @@ from tasks import (
 # --- Model & Data ---
 # Must match the identify_mc_correlate.py settings that produced Stage 1 files
 MODEL = "meta-llama/Llama-3.3-70B-Instruct"
-DATASET = "TriviaMC_difficulty_filtered"
+DATASET = "PopMC_0_difficulty_filtered"
 ADAPTER = None  # "Tristan-Day/ect_20251222_215412_v0uei7y1_2000" #
 METRICS = ["logit_gap", "top_logit", "entropy"]  # Exp1/Exp2 confirmatory metric set
 META_TASK = "delegate"  # Confirmatory default; switch per runbook when needed

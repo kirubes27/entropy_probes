@@ -90,7 +90,7 @@ from tasks import (
 # --- Model & Data ---
 MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 ADAPTER = None  # Optional: LoRA adapter path (must match identify step if used)
-DATASET = "TriviaMC_difficulty_filtered"  # Dataset name (model prefix now in directory)
+DATASET = "PopMC_0_difficulty_filtered"  # Dataset name (model prefix now in directory)
 METRIC = "logit_gap"  # Which metric's directions to test
 META_TASK = "delegate"  # Confirmatory default
 PROBE_POSITION = "final"  # Position from test_meta_transfer.py outputs
