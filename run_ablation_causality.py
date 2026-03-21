@@ -105,7 +105,7 @@ from tasks import (
 # --- Model & Data ---
 MODEL = "meta-llama/Llama-3.3-70B-Instruct"
 ADAPTER = None  # Optional: LoRA adapter path (must match identify step if used)
-DATASET = "TriviaMC_difficulty_filtered"  # Evaluation dataset (meta-task runs here)
+DATASET = "PopMC_0_difficulty_filtered"  # Evaluation dataset (meta-task runs here)
 DIRECTION_DATASET = None  # Source of directions (None = use DATASET, or e.g. "PopMC_0_difficulty_filtered")
 METRIC = "logit_gap"  # Which metric's directions to test (for uncertainty/metamcuncert)
 META_TASK = "delegate"  # "confidence", "delegate", or "other_confidence"
