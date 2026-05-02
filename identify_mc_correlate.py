@@ -89,6 +89,7 @@ PROBE_ALPHA = 1000.0         # Must match across scripts
 PROBE_PCA_COMPONENTS = 100   # Must match across scripts
 TRAIN_SPLIT = 0.8            # Must match across scripts
 MEAN_DIFF_QUANTILE = 0.25    # Must match across scripts
+DIRECTION_N_JOBS = 1         # Sequential by default; avoids joblib deadlocks on large 70B activations
 
 # --- Answer directions ---
 FIND_ANSWER_DIRECTIONS = True   # Find answer (A/B/C/D) directions from MC activations
@@ -314,6 +315,7 @@ def main():
             probe_train_split=TRAIN_SPLIT,
             mean_diff_quantile=MEAN_DIFF_QUANTILE,
             seed=SEED,
+            n_jobs=DIRECTION_N_JOBS,
             return_scaler=True,
         )
 
