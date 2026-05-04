@@ -16,7 +16,11 @@ set -euo pipefail
 #   PYTHON_BIN=/workspace/entropy_venv/bin/python
 #   BRANCH=codex/clean-rerun
 #   FRESH_OUTPUTS=1
+#   START_AT_STEP=1
+#   END_AT_STEP=999
 #   RUN_SIMPLEMC=1
+#   SIMPLE_DATASET=SimpleMC_difficulty_filtered
+#   SIMPLE_NUM_QUESTIONS=408
 #   RUN_STATED_CONFIDENCE=1
 #   RUN_OTHER_CONFIDENCE=0
 #   RUN_OPTIONS_STEERING=0
@@ -35,9 +39,10 @@ GIT_REMOTE="${GIT_REMOTE:-auto}"
 MODEL="${MODEL:-meta-llama/Llama-3.3-70B-Instruct}"
 MODEL_DIR="${MODEL_DIR:-Llama-3.3-70B-Instruct_4bit}"
 MAIN_DATASETS="${MAIN_DATASETS:-TriviaMC_difficulty_filtered PopMC_0_difficulty_filtered}"
-SIMPLE_DATASET="${SIMPLE_DATASET:-SimpleMC}"
+SIMPLE_DATASET="${SIMPLE_DATASET:-SimpleMC_difficulty_filtered}"
 
 NUM_QUESTIONS="${NUM_QUESTIONS:-500}"
+SIMPLE_NUM_QUESTIONS="${SIMPLE_NUM_QUESTIONS:-408}"
 SEED="${SEED:-42}"
 TRAIN_SPLIT="${TRAIN_SPLIT:-0.8}"
 METRICS_PY="${METRICS_PY:-['logit_gap','top_logit','entropy']}"
@@ -46,6 +51,8 @@ LOGIT_LENS_LAYERS_PY="${LOGIT_LENS_LAYERS_PY:-[31,32,33,40,41,42,43,75,76,77,78]
 LOGIT_LENS_METRICS="${LOGIT_LENS_METRICS:-all}"
 
 FRESH_OUTPUTS="${FRESH_OUTPUTS:-1}"
+START_AT_STEP="${START_AT_STEP:-1}"
+END_AT_STEP="${END_AT_STEP:-999}"
 RUN_SIMPLEMC="${RUN_SIMPLEMC:-1}"
 RUN_STATED_CONFIDENCE="${RUN_STATED_CONFIDENCE:-1}"
 RUN_OTHER_CONFIDENCE="${RUN_OTHER_CONFIDENCE:-0}"
@@ -108,7 +115,8 @@ run_step() {
   log "START $step"
   log "CMD $cmd"
 
-  ssh -i "$SSH_KEY" -p "$REMOTE_PORT" -o StrictHostKeyChecking=no "$REMOTE_HOST" \
+  ssh -T -i "$SSH_KEY" -p "$REMOTE_PORT" -o StrictHostKeyChecking=no \
+    -o ServerAliveInterval=30 -o ServerAliveCountMax=6 "$REMOTE_HOST" \
     bash -s -- "$REMOTE_REPO" "$remote_log" "$cmd_b64" <<'EOS'
 set -euo pipefail
 repo="$1"
@@ -126,7 +134,11 @@ mkdir -p "$HF_HOME" "$TRANSFORMERS_CACHE" /workspace/runlogs
 cd "$repo"
 echo "=== Running at $(date -Iseconds) ==="
 echo "$cmd"
-eval "$cmd" 2>&1 | tee "$remote_log"
+set +e
+eval "$cmd" > "$remote_log" 2>&1
+code=$?
+tail -n 120 "$remote_log" || true
+exit "$code"
 EOS
 
   log "DONE $step"
@@ -154,12 +166,33 @@ EOS
   CURRENT_STEP=""
 }
 
+maybe_run_step() {
+  local idx="$1"
+  local step="$2"
+  local cmd="$3"
+
+  if [ "$idx" -lt "$START_AT_STEP" ]; then
+    log "SKIP $step (idx=$idx < START_AT_STEP=$START_AT_STEP)"
+    record_status "$step" "SKIPPED" "START_AT_STEP=$START_AT_STEP"
+    return 0
+  fi
+
+  if [ "$idx" -gt "$END_AT_STEP" ]; then
+    log "SKIP $step (idx=$idx > END_AT_STEP=$END_AT_STEP)"
+    record_status "$step" "SKIPPED" "END_AT_STEP=$END_AT_STEP"
+    return 0
+  fi
+
+  run_step "$step" "$cmd"
+}
+
 py_stage0_cmd() {
   local dataset="$1"
+  local num_questions="${2:-$NUM_QUESTIONS}"
   cat <<PY
 $PYTHON_BIN -u -c "import identify_mc_correlate as m; \
 m.MODEL='$MODEL'; m.DATASET='$dataset'; m.METRICS=$METRICS_PY; \
-m.NUM_QUESTIONS=$NUM_QUESTIONS; m.SEED=$SEED; m.TRAIN_SPLIT=$TRAIN_SPLIT; \
+m.NUM_QUESTIONS=$num_questions; m.SEED=$SEED; m.TRAIN_SPLIT=$TRAIN_SPLIT; \
 m.DIRECTION_N_JOBS=1; \
 m.LOAD_IN_4BIT=True; m.LOAD_IN_8BIT=False; m.FIND_ANSWER_DIRECTIONS=True; \
 print('STAGE0_CONFIG', {'dataset':m.DATASET,'metrics':m.METRICS,'num_questions':m.NUM_QUESTIONS,'seed':m.SEED,'direction_n_jobs':m.DIRECTION_N_JOBS}); \
@@ -304,46 +337,46 @@ fi
 
 step_i=1
 for dataset in $MAIN_DATASETS; do
-  run_step "$(printf '%02d_stage0_%s' "$step_i" "$dataset")" "$(py_stage0_cmd "$dataset")"
+  maybe_run_step "$step_i" "$(printf '%02d_stage0_%s' "$step_i" "$dataset")" "$(py_stage0_cmd "$dataset")"
   step_i=$((step_i + 1))
-  run_step "$(printf '%02d_delegate_transfer_%s' "$step_i" "$dataset")" "$(py_transfer_cmd "$dataset" "delegate" "$POSITIONS_PY" "True")"
+  maybe_run_step "$step_i" "$(printf '%02d_delegate_transfer_%s' "$step_i" "$dataset")" "$(py_transfer_cmd "$dataset" "delegate" "$POSITIONS_PY" "True")"
   step_i=$((step_i + 1))
 done
 
-run_step "$(printf '%02d_cross_dataset_cosine' "$step_i")" "$(py_cosine_cmd)"
+maybe_run_step "$step_i" "$(printf '%02d_cross_dataset_cosine' "$step_i")" "$(py_cosine_cmd)"
 step_i=$((step_i + 1))
 
 for dataset in $MAIN_DATASETS; do
   for metric in $LOGIT_LENS_METRICS; do
-    run_step "$(printf '%02d_logit_lens_%s_%s' "$step_i" "$dataset" "$metric")" "$(py_logit_lens_cmd "$dataset" "$metric")"
+    maybe_run_step "$step_i" "$(printf '%02d_logit_lens_%s_%s' "$step_i" "$dataset" "$metric")" "$(py_logit_lens_cmd "$dataset" "$metric")"
     step_i=$((step_i + 1))
   done
 done
 
 if [ "$RUN_SIMPLEMC" -eq 1 ]; then
-  run_step "$(printf '%02d_stage0_%s' "$step_i" "$SIMPLE_DATASET")" "$(py_stage0_cmd "$SIMPLE_DATASET")"
+  maybe_run_step "$step_i" "$(printf '%02d_stage0_%s' "$step_i" "$SIMPLE_DATASET")" "$(py_stage0_cmd "$SIMPLE_DATASET" "$SIMPLE_NUM_QUESTIONS")"
   step_i=$((step_i + 1))
-  run_step "$(printf '%02d_delegate_transfer_%s' "$step_i" "$SIMPLE_DATASET")" "$(py_transfer_cmd "$SIMPLE_DATASET" "delegate" "$POSITIONS_PY" "True")"
+  maybe_run_step "$step_i" "$(printf '%02d_delegate_transfer_%s' "$step_i" "$SIMPLE_DATASET")" "$(py_transfer_cmd "$SIMPLE_DATASET" "delegate" "$POSITIONS_PY" "True")"
   step_i=$((step_i + 1))
 fi
 
 if [ "$RUN_STATED_CONFIDENCE" -eq 1 ]; then
   for dataset in $MAIN_DATASETS; do
-    run_step "$(printf '%02d_stated_confidence_%s' "$step_i" "$dataset")" "$(py_transfer_cmd "$dataset" "confidence" "['final']" "False")"
+    maybe_run_step "$step_i" "$(printf '%02d_stated_confidence_%s' "$step_i" "$dataset")" "$(py_transfer_cmd "$dataset" "confidence" "['final']" "False")"
     step_i=$((step_i + 1))
   done
 fi
 
 if [ "$RUN_OTHER_CONFIDENCE" -eq 1 ]; then
   for dataset in $MAIN_DATASETS; do
-    run_step "$(printf '%02d_other_confidence_%s' "$step_i" "$dataset")" "$(py_transfer_cmd "$dataset" "other_confidence" "['final']" "False")"
+    maybe_run_step "$step_i" "$(printf '%02d_other_confidence_%s' "$step_i" "$dataset")" "$(py_transfer_cmd "$dataset" "other_confidence" "['final']" "False")"
     step_i=$((step_i + 1))
   done
 fi
 
 if [ "$RUN_OPTIONS_STEERING" -eq 1 ]; then
   for dataset in $MAIN_DATASETS; do
-    run_step "$(printf '%02d_options_newline_steering_%s' "$step_i" "$dataset")" "$(py_options_steering_cmd "$dataset")"
+    maybe_run_step "$step_i" "$(printf '%02d_options_newline_steering_%s' "$step_i" "$dataset")" "$(py_options_steering_cmd "$dataset")"
     step_i=$((step_i + 1))
   done
 fi

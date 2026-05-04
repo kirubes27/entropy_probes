@@ -56,6 +56,13 @@ def load_and_format_dataset(dataset_name, num_questions_needed=None, split=None,
             return load_and_format_simpleqa(num_questions_needed, split=split, skip_questions=skip_questions)
     elif dataset_name=="SimpleMC":
         return load_and_format_simplemc(num_questions_needed, skip_questions=skip_questions)
+    elif dataset_name=="SimpleMC_difficulty_filtered":
+        return load_and_format_triviamc_filtered(
+            num_questions_needed,
+            skip_questions=skip_questions,
+            shuffle_answers=shuffle_answers,
+            dataset_name="SimpleMC_difficulty_filtered",
+        )
     elif dataset_name=="PopMC":
         return load_and_format_popmc(num_questions_needed, skip_questions=skip_questions, shuffle_answers=shuffle_answers)
     elif dataset_name=="PopMC_0_difficulty_filtered":
