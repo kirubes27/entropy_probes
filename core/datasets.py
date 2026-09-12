@@ -22,6 +22,10 @@ import ast
 import hashlib
 import re
 
+from .paths import DATA_DIR, PROJECT_ROOT
+
+FT_DIR = PROJECT_ROOT / "ft"
+
 random.seed(42)  # For reproducibility
 hf_token = os.environ.get("HF_TOKEN")
 
@@ -500,7 +504,7 @@ def load_and_format_simplemc(num_questions_needed=None, split="test", skip_quest
     import json
     print(f"Attempting to load SimpleMC...")
     try:
-        filename = "./SimpleMC.jsonl"
+        filename = DATA_DIR / "SimpleMC.jsonl"
         with open(filename, 'r') as f:
             dataset = [json.loads(line) for line in f]
         print("Dataset loaded successfully.")
@@ -636,9 +640,9 @@ def load_and_format_garupanese(num_questions_needed=None, split="both", skip_que
     print(f"Attempting to load Garupanese ({split} split)...")
     import json
     try:
-        with open("ft/garupanese_trained_words.json", "r", encoding="utf-8") as f:
+        with (FT_DIR / "garupanese_trained_words.json").open("r", encoding="utf-8") as f:
             trained_words = json.load(f)
-        with open("ft/garupanese_untrained_words.json", "r", encoding="utf-8") as f:
+        with (FT_DIR / "garupanese_untrained_words.json").open("r", encoding="utf-8") as f:
             untrained_words = json.load(f)
         print("Dataset loaded successfully.")
     except Exception as e:
@@ -727,9 +731,9 @@ def load_and_format_garupanesemc(num_questions_needed=None, split="both", skip_q
     labels = ["A", "B", "C", "D"]
     import json
     try:
-        with open("ft/garupanese_trained_words.json", "r", encoding="utf-8") as f:
+        with (FT_DIR / "garupanese_trained_words.json").open("r", encoding="utf-8") as f:
             trained_words = json.load(f)
-        with open("ft/garupanese_untrained_words.json", "r", encoding="utf-8") as f:
+        with (FT_DIR / "garupanese_untrained_words.json").open("r", encoding="utf-8") as f:
             untrained_words = json.load(f)
         print("Dataset loaded successfully.")
     except Exception as e:
@@ -876,7 +880,7 @@ def load_and_format_popmc(num_questions_needed=None, split="test", skip_question
     import json
     print(f"Attempting to load PopMC...")
     try:
-        filename = "./data/PopMC.jsonl"
+        filename = DATA_DIR / "PopMC.jsonl"
         with open(filename, 'r') as f:
             dataset = [json.loads(line) for line in f]
         print("PopMC Dataset loaded successfully.")
@@ -966,9 +970,9 @@ def load_and_format_popmc_filtered(num_questions_needed=None, split="test", skip
     try:
         # Construct filename based on split
         if split == "val" or split == "validation":
-            filename = "./data/PopMC_0_difficulty_filtered_val.jsonl"
+            filename = DATA_DIR / "PopMC_0_difficulty_filtered_val.jsonl"
         else:
-            filename = "./data/PopMC_0_difficulty_filtered.jsonl"
+            filename = DATA_DIR / "PopMC_0_difficulty_filtered.jsonl"
         with open(filename, 'r') as f:
             dataset = [json.loads(line) for line in f]
         print(f"PopMC_0_difficulty_filtered Dataset ({split} split) loaded successfully.")
@@ -1052,7 +1056,7 @@ def load_and_format_triviamc(num_questions_needed=None, split="test", skip_quest
     import json
     print(f"Attempting to load TriviaMC...")
     try:
-        filename = "./data/TriviaMC.jsonl"
+        filename = DATA_DIR / "TriviaMC.jsonl"
         with open(filename, 'r') as f:
             dataset = [json.loads(line) for line in f]
         print("TriviaMC Dataset loaded successfully.")
@@ -1136,7 +1140,7 @@ def load_and_format_triviamc_filtered(num_questions_needed=None, split="test", s
     import json
     print(f"Attempting to load {dataset_name}...")
     try:
-        filename = f"./data/{dataset_name}.jsonl"
+        filename = DATA_DIR / f"{dataset_name}.jsonl"
         with open(filename, 'r') as f:
             dataset = [json.loads(line) for line in f]
         print(f"{dataset_name} loaded successfully ({len(dataset)} questions).")

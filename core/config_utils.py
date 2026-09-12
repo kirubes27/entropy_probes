@@ -42,6 +42,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
+from .paths import OUTPUTS_DIR, PROJECT_ROOT
+
 
 def _get_git_hash() -> str:
     """Get short git hash of current commit, or 'unknown' if not in a repo."""
@@ -49,6 +51,7 @@ def _get_git_hash() -> str:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=5,
+            cwd=PROJECT_ROOT,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -115,7 +118,7 @@ def get_config_dict(**kwargs: Any) -> Dict[str, Any]:
 # Directory structure:
 #   outputs/results/  <- Human-readable outputs (final results, plots)
 #   outputs/working/  <- Machine data (activations, directions, checkpoints, logs)
-OUTPUT_BASE_DIR = Path(__file__).parent.parent / "outputs"
+OUTPUT_BASE_DIR = OUTPUTS_DIR
 RESULTS_DIR = OUTPUT_BASE_DIR / "results"
 WORKING_DIR = OUTPUT_BASE_DIR / "working"
 

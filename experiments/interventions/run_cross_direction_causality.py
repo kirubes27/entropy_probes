@@ -65,7 +65,7 @@ from core.steering_experiments import (
     create_fresh_cache,
 )
 from core.steering import AblationHook
-from tasks import (
+from core.tasks import (
     format_stated_confidence_prompt,
     format_answer_or_delegate_prompt,
     format_other_confidence_prompt,

@@ -14,7 +14,6 @@ Shared parameters (must match across scripts):
 Run after: (none)
 """
 
-from pathlib import Path
 import json
 import random
 import sys
@@ -27,7 +26,8 @@ from core import (
     should_use_chat_template,
     load_questions,
 )
-from tasks import format_direct_prompt
+from core.paths import DATA_DIR
+from core.tasks import format_direct_prompt
 
 
 # =============================================================================
@@ -52,8 +52,7 @@ N_INCORRECT = 250            # Target number of incorrect questions
 ESTIMATED_ACCURACY = 0.87    # Expected model accuracy (for sample size estimation)
 SAFETY_MARGIN = 1.3          # Oversample factor
 
-# --- Output ---
-DATA_DIR = Path(__file__).parent / "data"
+# DATA_DIR is anchored to the repository root by core.paths.
 
 
 # =============================================================================
@@ -185,9 +184,9 @@ def main():
     print(f"  {len(selected)} questions ({N_CORRECT} correct + {N_INCORRECT} incorrect)")
     print()
     print("Now run the normal pipeline:")
-    print(f'  1. Edit identify_mc_correlate.py: DATASET = "{DATASET}_difficulty_filtered"')
-    print(f"  2. python identify_mc_correlate.py")
-    print(f"  3. python test_cross_dataset_transfer.py")
+    print(f'  1. Edit experiments/directions/identify_mc_correlate.py: DATASET = "{DATASET}_difficulty_filtered"')
+    print(f"  2. python -m experiments.directions.identify_mc_correlate")
+    print(f"  3. python -m experiments.transfer.test_cross_dataset_transfer")
 
 
 if __name__ == "__main__":

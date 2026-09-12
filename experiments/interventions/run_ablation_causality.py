@@ -84,7 +84,7 @@ from core.steering_experiments import (
     precompute_direction_tensors,
 )
 from core.metrics import metric_sign_for_confidence
-from tasks import (
+from core.tasks import (
     format_stated_confidence_prompt,
     get_stated_confidence_signal,
     format_answer_or_delegate_prompt,

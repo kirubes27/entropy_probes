@@ -76,7 +76,7 @@ from core.confidence_directions import (
     find_mc_uncertainty_directions_from_meta,
     compare_confidence_to_uncertainty,
 )
-from tasks import (
+from core.tasks import (
     format_stated_confidence_prompt,
     format_answer_or_delegate_prompt,
     format_other_confidence_prompt,

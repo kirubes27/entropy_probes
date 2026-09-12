@@ -1,7 +1,7 @@
 # Guidelines for Claude
 
 ## Do not run tests locally
-This repo runs on a remote machine. Never run `python run_ablation_causality.py` or similar test commands locally - it won't work and wastes time. Rely on static analysis instead.
+This repo runs on a remote machine. Never run `python -m experiments.interventions.run_ablation_causality` or similar test commands locally - it won't work and wastes time. Rely on static analysis instead.
 
 ## Local outputs directory is not representative
 The `outputs/` directory on the local machine may be empty or stale. The user runs experiments on a remote GPU machine, so:
@@ -125,7 +125,7 @@ This codebase uses **left-padding** (`core/model_utils.py:160`). When extracting
 - **WRONG:** `logits[i, seq_len - 1, :]` - gets wrong position with left-padding
 
 ### Options Dict Preservation
-Difficulty-filtered datasets store options as a dict `{"A": "...", "B": "...", ...}` with letter keys. The loader in `load_and_format_datasets.py` checks for pre-stored options and uses them directly without reshuffling, preserving exact prompt reproducibility.
+Difficulty-filtered datasets store options as a dict `{"A": "...", "B": "...", ...}` with letter keys. The loader in `core/datasets.py` checks for pre-stored options and uses them directly without reshuffling, preserving exact prompt reproducibility.
 
 ### Configuration Pattern
 Scripts use module-level constants (MODEL, DATASET, NUM_QUESTIONS, etc.) rather than CLI args. Edit the constants directly to change behavior. Constants that must be consistent across scripts are marked `# Must match across scripts` (see Shared Parameters below).
@@ -141,7 +141,7 @@ These constants must be identical across all scripts that use them:
 | `TRAIN_SPLIT` | `0.8` | Same + ablation, steering |
 | `MEAN_DIFF_QUANTILE` | `0.25` | identify_mc, identify_nexttoken, test_meta, test_cross_dataset |
 
-If you change one, grep for that constant name across all root `.py` files and change them all.
+If you change one, grep for that constant name across `core/`, `experiments/`, and `analysis/` Python files and change them all.
 
 ### Output File Naming
 Output filenames use `{dataset}` as the base (model prefix is now in the directory). Stage 2 files use `meta_` prefix:
@@ -212,14 +212,14 @@ When writing new plotting code:
 - Import colors/constants from `core.plotting` instead of hardcoding
 - Use `save_figure(fig, path)` instead of `plt.tight_layout(); plt.savefig(); plt.close(); print()`
 - Use `GRID_ALPHA` for `ax.grid(True, alpha=...)` and `CI_ALPHA` for `ax.fill_between(..., alpha=...)`
-- Exception: `test_cross_dataset_transfer.py` defines its own `CI_ALPHA = 0.05` for Fisher-z statistical CIs — do not shadow it with the plotting constant
+- Exception: `experiments/transfer/test_cross_dataset_transfer.py` defines its own `CI_ALPHA = 0.05` for Fisher-z statistical CIs — do not shadow it with the plotting constant
 
 ### JSON Config Metadata
 Every `*_results.json` includes a `config` section produced by `get_config_dict()` from `core/config_utils.py`. This helper adds timestamp, git hash, and quantization automatically. Pass script-specific constants as keyword arguments.
 
 ### Script Consolidation
-- `identify_mc_answer_correlate.py` is merged into `identify_mc_correlate.py` (controlled by `FIND_ANSWER_DIRECTIONS` flag)
-- `identify_confidence_correlate.py` is merged into `test_meta_transfer.py` (controlled by `FIND_CONFIDENCE_DIRECTIONS` flag)
+- `identify_mc_answer_correlate.py` is merged into `experiments/directions/identify_mc_correlate.py` (controlled by `FIND_ANSWER_DIRECTIONS` flag)
+- `identify_confidence_correlate.py` is merged into `experiments/transfer/test_meta_transfer.py` (controlled by `FIND_CONFIDENCE_DIRECTIONS` flag)
 - `summarize_results.py`, `compare_direction_types.py`, `regenerate_directions_plot.py` moved to `archive/` (redundant)
 - The standalone scripts remain in `archive/` for reference
 - Pre-modification snapshots are in `archive/originals/`

@@ -41,6 +41,7 @@ from typing import Any, Dict, List, Optional, Union
 import subprocess
 
 from core.config_utils import get_output_path
+from core.paths import PROJECT_ROOT
 
 
 def _get_git_hash() -> str:
@@ -49,6 +50,7 @@ def _get_git_hash() -> str:
         result = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=5,
+            cwd=PROJECT_ROOT,
         )
         if result.returncode == 0:
             return result.stdout.strip()

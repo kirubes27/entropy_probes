@@ -62,7 +62,7 @@ from core.answer_directions import (
     find_answer_directions_both_methods,
     encode_answers,
 )
-from tasks import format_direct_prompt
+from core.tasks import format_direct_prompt
 
 # =============================================================================
 # CONFIGURATION

@@ -1782,7 +1782,7 @@ def analyze_existing_results(json_path: str):
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--analyze":
         if len(sys.argv) < 3:
-            print("Usage: python act_oracles.py --analyze <path_to_ao_interpretations.json>")
+            print("Usage: python -m analysis.directions.act_oracles --analyze <path_to_ao_interpretations.json>")
             sys.exit(1)
         analyze_existing_results(sys.argv[2])
     else:

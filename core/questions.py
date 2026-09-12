@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 import numpy as np
 
-# Import centralized prompt formatting from tasks.py
-from tasks import format_direct_prompt as _format_direct_prompt_impl
+# Import centralized prompt formatting from core/tasks.py
+from .tasks import format_direct_prompt as _format_direct_prompt_impl
 
 
 def load_questions(
@@ -38,7 +38,7 @@ def load_questions(
     Returns:
         List of question dicts with 'question', 'options', 'correct_answer', etc.
     """
-    from load_and_format_datasets import load_and_format_dataset
+    from .datasets import load_and_format_dataset
 
     questions = load_and_format_dataset(dataset_name, num_questions_needed=num_questions)
 
