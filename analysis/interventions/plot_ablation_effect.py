@@ -3,10 +3,10 @@
 Plot layer-wise ablation effects for a specific direction pair.
 
 Usage:
-    python plot_ablation_effect.py <ablate_type> <measure_type> <ablate_layer>
+    python -m analysis.interventions.plot_ablation_effect <ablate_type> <measure_type> <ablate_layer>
 
 Example:
-    python plot_ablation_effect.py uncertainty confidence 14
+    python -m analysis.interventions.plot_ablation_effect uncertainty confidence 14
 
 Configure MODEL, DATASET below to specify which results file to use.
 

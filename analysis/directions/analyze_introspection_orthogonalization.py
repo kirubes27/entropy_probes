@@ -63,7 +63,7 @@ from core.steering_experiments import (
     get_kv_cache,
     create_fresh_cache,
 )
-from tasks import (
+from core.tasks import (
     format_stated_confidence_prompt,
     format_other_confidence_prompt,
     get_stated_confidence_signal,

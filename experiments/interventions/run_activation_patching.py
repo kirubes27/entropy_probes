@@ -57,7 +57,7 @@ from core.steering import (
     BatchPatchingHook,
     generate_orthogonal_directions,
 )
-from tasks import (
+from core.tasks import (
     STATED_CONFIDENCE_OPTIONS,
     STATED_CONFIDENCE_MIDPOINTS,
     format_stated_confidence_prompt,
